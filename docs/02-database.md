@@ -73,6 +73,13 @@ The `InitialCreate` migration is already generated and committed in `Persistence
 dotnet run --project src/CommunitySos.Api -- --migrate
 ```
 
+A full SQL Server instance (for example SQL Server Express, `localhost\SQLEXPRESS`) instead of LocalDB: keep the connection string in user secrets, which are per machine and never committed:
+
+```powershell
+dotnet user-secrets set "ConnectionStrings:Sql" "Server=localhost\SQLEXPRESS;Database=CommunitySos;Trusted_Connection=True;TrustServerCertificate=True" --project src/CommunitySos.Api
+dotnet run --project src/CommunitySos.Api -- --migrate
+```
+
 SQL Server in Docker:
 
 ```powershell
