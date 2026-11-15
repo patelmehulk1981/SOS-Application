@@ -323,6 +323,11 @@ public sealed class SqlServerTests(SqlServerFixture fixture, ITestOutputHelper o
         Assert.Equal(members / 2, deliveries.Select(d => d.RecipientUserId).Distinct().Count());
         output.WriteLine($"usp_SelectSosRecipients: {deliveries.Count} deliveries in {select.ElapsedMilliseconds} ms");
 
+        // The timed selection above claimed every recipient, as a dispatch run would. Release the claims so the
+        // dispatch below measures a normal run (in production selection and sending are one run).
+        await Factory.WithDbAsync(db => db.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE dbo.SosNotifications SET ClaimedUntil = NULL WHERE SosRequestId = {sosId}"));
+
         var dispatch = Stopwatch.StartNew();
         await DispatchAsync(sosId);
         dispatch.Stop();
