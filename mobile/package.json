@@ -72,5 +72,8 @@
     "setupFiles": [
       "<rootDir>/jest.setup.js"
     ]
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.6"
   }
 }

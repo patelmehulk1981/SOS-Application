@@ -39,6 +39,24 @@ jobs:
           --logger "trx;LogFilePrefix=results"
           --logger "console;verbosity=normal"
           --results-directory ../test-results
+      - name: Report failed tests as annotations
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          shown = 0
+          for path in glob.glob("../test-results/*.trx"):
+              root = ET.parse(path).getroot()
+              for r in root.iterfind(".//t:UnitTestResult", ns):
+                  if r.get("outcome") != "Failed" or shown >= 10:
+                      continue
+                  msg = (r.findtext(".//t:Message", "", ns) + "\n" + r.findtext(".//t:StackTrace", "", ns))[:1800]
+                  msg = msg.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+                  print(f"::error title={r.get('testName')}::{msg}")
+                  shown += 1
+          print(f"{shown} failed test(s) annotated")
+          PY
       - name: Vulnerable packages
         run: |
           dotnet list package --vulnerable --include-transitive | tee ../vulnerable.txt
