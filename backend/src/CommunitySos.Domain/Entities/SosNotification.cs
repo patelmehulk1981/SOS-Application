@@ -43,6 +43,18 @@ public sealed class SosNotification : Entity<long>
     public DateTime CreatedAt { get; private set; }
 
     /// <summary>
+    /// Set when a dispatch run hands this recipient out for pushing; another run skips it until the claim
+    /// is released (by recording the outcome) or expires (the worker died mid-send). Stops overlapping
+    /// runs (a retry, two approvals) from pushing the same person twice.
+    /// </summary>
+    public DateTime? ClaimedUntil { get; private set; }
+
+    public bool IsClaimed(DateTime now) => ClaimedUntil is { } until && until > now;
+
+    /// <summary>Hands the recipient to one dispatch run until <paramref name="until"/>.</summary>
+    public void Claim(DateTime until) => ClaimedUntil = until;
+
+    /// <summary>
     /// In production, recipients are inserted set-based by dbo.usp_SelectSosRecipients. This factory exists for
     /// non-SQL providers (tests) and tooling.
     /// </summary>
@@ -66,6 +78,7 @@ public sealed class SosNotification : Entity<long>
 
     public void MarkSent(DateTime now)
     {
+        ClaimedUntil = null;
         DeliveryStatus = DeliveryStatus.Sent;
         AttemptCount++;
         SentAt ??= now;
@@ -74,6 +87,7 @@ public sealed class SosNotification : Entity<long>
 
     public void MarkFailed(string error)
     {
+        ClaimedUntil = null;
         DeliveryStatus = DeliveryStatus.Failed;
         AttemptCount++;
         LastError = Text.Truncate(error, ErrorMaxLength);
@@ -82,6 +96,7 @@ public sealed class SosNotification : Entity<long>
     /// <summary>Every device of the recipient turned out to be unregistered: nothing left to push to.</summary>
     public void MarkNoDevice(string error)
     {
+        ClaimedUntil = null;
         DeliveryStatus = DeliveryStatus.NoDevice;
         AttemptCount++;
         LastError = Text.Truncate(error, ErrorMaxLength);

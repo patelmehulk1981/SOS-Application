@@ -34,29 +34,44 @@ public sealed class DispatchSosAlertsJob(
         }
 
         var settings = options.Value;
+        // The selector CLAIMS what it returns (see usp_SelectSosRecipients), so overlapping runs never push twice.
         var deliveries = await selector.SelectAsync(sosId, settings, cancellationToken);
         if (deliveries.Count == 0)
         {
+            await ThrowIfOthersStillDeliveringAsync(sosId, settings, cancellationToken);
             logger.LogInformation("SOS {SosId}: no neighbour to push to (nobody in range, or all delivered)", sosId);
             return;
         }
 
+        var notificationIds = deliveries.Select(d => d.SosNotificationId).Distinct().ToList();
         var ttl = TimeSpan.FromMinutes(settings.TimeToLiveMinutes);
         var results = new Dictionary<Guid, PushResult>();
-        foreach (var group in deliveries.GroupBy(d => PushMessages.DescribeDistance(d.DistanceMeters)))
+        try
         {
-            var targets = group
-                .DistinctBy(d => d.DeviceId)
-                .Select(d => new PushTarget(d.DeviceId, d.FcmToken, d.InstallationId))
-                .ToList();
-            foreach (var result in await push.SendAsync(targets, PushMessages.AlertFor(sos, group.Key, ttl), cancellationToken))
+            foreach (var group in deliveries.GroupBy(d => PushMessages.DescribeDistance(d.DistanceMeters)))
             {
-                results[result.DeviceId] = result;
+                var targets = group
+                    .DistinctBy(d => d.DeviceId)
+                    .Select(d => new PushTarget(d.DeviceId, d.FcmToken, d.InstallationId))
+                    .ToList();
+                foreach (var result in await push.SendAsync(targets, PushMessages.AlertFor(sos, group.Key, ttl), cancellationToken))
+                {
+                    results[result.DeviceId] = result;
+                }
             }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Release the claims (as a failed attempt) so the Hangfire retry can resend at once instead of
+            // finding everyone still claimed. Some may have been delivered before the failure; a resend is
+            // collapsed on the phone (same collapse key), whereas a missed SOS alert is not recoverable.
+            var unsent = await db.SosNotifications.Where(n => notificationIds.Contains(n.Id)).ToListAsync(CancellationToken.None);
+            unsent.ForEach(n => n.MarkFailed($"Send failed: {ex.GetType().Name}"));
+            await db.SaveChangesAsync(CancellationToken.None);
+            throw;
         }
 
         var now = clock.GetUtcNow().UtcDateTime;
-        var notificationIds = deliveries.Select(d => d.SosNotificationId).Distinct().ToList();
         var notifications = await db.SosNotifications.Where(n => notificationIds.Contains(n.Id)).ToListAsync(cancellationToken);
         int sent = 0, noDevice = 0, failed = 0;
         var retry = false;
@@ -103,6 +118,26 @@ public sealed class DispatchSosAlertsJob(
         if (retry)
         {
             throw new PushDeliveryException($"SOS {sosId}: {failed} neighbour alert(s) failed; retrying.");
+        }
+    }
+
+    /// <summary>
+    /// Nothing was handed to this run, but recipients are still undelivered under another run's claim (it is
+    /// sending right now, or its worker died and the claim has yet to expire). Throwing makes Hangfire check
+    /// again later, so a crashed run's recipients are still alerted once its claim expires.
+    /// </summary>
+    private async Task ThrowIfOthersStillDeliveringAsync(Guid sosId, AlertOptions settings, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow().UtcDateTime;
+        var pending = await db.SosNotifications.AnyAsync(
+            n => n.SosRequestId == sosId
+                 && (n.DeliveryStatus == DeliveryStatus.Queued || n.DeliveryStatus == DeliveryStatus.Failed)
+                 && n.AttemptCount < settings.MaxAttempts
+                 && n.ClaimedUntil != null && n.ClaimedUntil > now,
+            ct);
+        if (pending)
+        {
+            throw new PushDeliveryException($"SOS {sosId}: alerts are still being delivered by another run; checking again later.");
         }
     }
 }

@@ -101,4 +101,22 @@ public sealed class AlertDomainTests
         Assert.Throws<DomainException>(() => UserDevice.RegisterInstallation(Guid.NewGuid(), " ", DevicePlatform.Ios, null, null, Now));
         Assert.Throws<DomainException>(() => UserDevice.RegisterInstallation(Guid.NewGuid(), new string('f', UserDevice.InstallationIdMaxLength + 1), DevicePlatform.Ios, null, null, Now));
     }
+
+    [Fact]
+    public void A_claim_holds_until_it_expires_or_an_outcome_is_recorded()
+    {
+        var alert = SosNotification.Create(Guid.NewGuid(), Guid.NewGuid(), 10, Now);
+        Assert.False(alert.IsClaimed(Now));
+
+        alert.Claim(Now.AddMinutes(2));
+        Assert.True(alert.IsClaimed(Now.AddMinutes(1)));
+        Assert.False(alert.IsClaimed(Now.AddMinutes(2))); // expired: a crashed worker's recipients come back
+
+        alert.MarkFailed("Unavailable");
+        Assert.Null(alert.ClaimedUntil);
+
+        alert.Claim(Now.AddMinutes(2));
+        alert.MarkSent(Now);
+        Assert.Null(alert.ClaimedUntil);
+    }
 }

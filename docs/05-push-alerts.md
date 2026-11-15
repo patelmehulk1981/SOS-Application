@@ -42,7 +42,12 @@ An admin's own SOS is auto-approved and dispatches immediately.
 | Push attempts per recipient | `MaxAttempts` | 5 |
 | FCM drops an undelivered alert after | `TimeToLiveMinutes` | 30 |
 
-**Never twice.** A recipient row is unique per (SOS, user) (`UX_SosNotifications_Sos_Recipient`), dispatches of one SOS are serialised (`sp_getapplock`), and a re-run only returns recipients not yet delivered. Hangfire retries, duplicate enqueues and two approvals racing therefore can't double-alert anyone.
+**Never twice.** A recipient row is unique per (SOS, user) (`UX_SosNotifications_Sos_Recipient`), dispatches of one SOS are serialised (`sp_getapplock`), and a re-run only returns recipients not yet delivered.
+- Each recipient handed to a run is **claimed** for `Alerts:ClaimSeconds` (120), so an overlapping run gets only unclaimed recipients.
+- Recording the outcome releases the claim; a send that throws releases it as a failed attempt.
+- A run that finds everyone claimed by another asks Hangfire to check again later, so a crashed worker's recipients are still alerted once the claim expires.
+
+Hangfire retries, duplicate enqueues and two approvals racing therefore can't double-alert anyone. The real-SQL-Server test `Dispatch_is_idempotent_and_serialised_under_concurrency` found this case (6 pushes for 3 people) before the claim existed.
 
 **Delivery per recipient.**
 - Pushed to any of their phones → `Sent`.

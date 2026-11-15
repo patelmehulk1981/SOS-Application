@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using CommunitySos.Application.Abstractions;
+using CommunitySos.Application.Common.Notifications;
 using CommunitySos.Application.Common.Options;
 using CommunitySos.Application.Features.Sos.Jobs;
 using CommunitySos.Domain.Entities;
@@ -169,9 +170,21 @@ public sealed class SqlServerTests(SqlServerFixture fixture, ITestOutputHelper o
         var sosId = await SeedApprovedSosAsync(lead, members[3]);
         var before = Factory.Push.Sent.Count;
 
-        // Two approvals racing / a Hangfire retry overlapping the first run.
-        await Task.WhenAll(DispatchAsync(sosId), DispatchAsync(sosId), DispatchAsync(sosId));
-        await DispatchAsync(sosId);
+        // Two approvals racing / a Hangfire retry overlapping the first run. A run that finds every recipient
+        // claimed by another asks Hangfire to check again later (PushDeliveryException): expected here.
+        static async Task Tolerant(Task run)
+        {
+            try
+            {
+                await run;
+            }
+            catch (PushDeliveryException)
+            {
+            }
+        }
+
+        await Task.WhenAll(Tolerant(DispatchAsync(sosId)), Tolerant(DispatchAsync(sosId)), Tolerant(DispatchAsync(sosId)));
+        await DispatchAsync(sosId); // everything delivered by now: completes quietly
 
         Assert.Equal(3, (await RecipientsAsync(sosId)).Count);
         var pushed = Factory.Push.Sent.Skip(before).Where(s => s.Message.Type == "sos.alert").SelectMany(s => s.Targets).ToList();

@@ -26,7 +26,8 @@ public sealed class AlertRecipientSelector(AppDbContext db, TimeProvider clock) 
                          @RadiusMeters = {options.RadiusMeters},
                          @FreshHours = {options.FreshHours},
                          @MaxAccuracyMeters = {options.MaxAccuracyMeters},
-                         @MaxAttempts = {options.MaxAttempts}
+                         @MaxAttempts = {options.MaxAttempts},
+                         @ClaimSeconds = {options.ClaimSeconds}
                     """)
                 .ToListAsync(cancellationToken); // EXEC cannot be composed: materialise as-is
             return rows.Select(r => r.ToDelivery()).ToList();
@@ -84,11 +85,19 @@ public sealed class AlertRecipientSelector(AppDbContext db, TimeProvider clock) 
         }
 
         sos.SetRecipientCount(notifications.Count);
+
+        // Same claim rule as the procedure: hand undelivered, unclaimed recipients with a device to this run.
+        var claimed = notifications
+            .Where(n => (n.DeliveryStatus is DeliveryStatus.Queued or DeliveryStatus.Failed)
+                        && n.AttemptCount < options.MaxAttempts
+                        && !n.IsClaimed(now)
+                        && activeDevices.Any(d => d.UserId == n.RecipientUserId))
+            .ToList();
+        claimed.ForEach(n => n.Claim(now.AddSeconds(options.ClaimSeconds)));
         await db.SaveChangesAsync(ct);
 
         return (
-                from n in notifications
-                where (n.DeliveryStatus is DeliveryStatus.Queued or DeliveryStatus.Failed) && n.AttemptCount < options.MaxAttempts
+                from n in claimed
                 join d in activeDevices on n.RecipientUserId equals d.UserId
                 orderby n.DistanceMeters
                 select new AlertDelivery(n.Id, n.RecipientUserId, n.DistanceMeters, d.Id, d.FcmToken, d.InstallationId))

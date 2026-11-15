@@ -7,7 +7,10 @@
 
      * sp_getapplock serialises concurrent dispatches of the same SOS;
      * NOT EXISTS + UX_SosNotifications_Sos_Recipient mean a user is inserted at most once;
-     * only rows in Queued(1)/Failed(3) with attempts left are returned for sending.
+     * only rows in Queued(1)/Failed(3) with attempts left are returned for sending, and each
+       returned row is CLAIMED for @ClaimSeconds inside the locked transaction: an overlapping run
+       (Hangfire retry, two approvals) gets only unclaimed rows, so nobody is pushed twice.
+       Recording the outcome releases the claim; a crashed worker's claims simply expire.
 
    Eligible recipient:
      Users.Status = Active(1), AlertsEnabled = 1, LocationSharingEnabled = 1,
@@ -31,7 +34,8 @@ CREATE OR ALTER PROCEDURE dbo.usp_SelectSosRecipients
     @RadiusMeters       float = 5000,
     @FreshHours         int   = 12,
     @MaxAccuracyMeters  float = 500,
-    @MaxAttempts        int   = 5
+    @MaxAttempts        int   = 5,
+    @ClaimSeconds       int   = 120
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -45,7 +49,8 @@ BEGIN
     DECLARE @RequesterUserId uniqueidentifier;
     DECLARE @Status          tinyint;
     DECLARE @LockResult      int;
-    DECLARE @LockResource    nvarchar(255) = N'SosDispatch:' + CONVERT(nvarchar(36), @SosRequestId);
+    DECLARE @Claimed         TABLE (Id bigint PRIMARY KEY);
+    DECLARE @LockResource   nvarchar(255) = N'SosDispatch:' + CONVERT(nvarchar(36), @SosRequestId);
 
     BEGIN TRANSACTION;
 
@@ -111,6 +116,18 @@ BEGIN
         UPDATE dbo.SosRequests
            SET RecipientCount = (SELECT COUNT(*) FROM dbo.SosNotifications WHERE SosRequestId = @SosRequestId)
         WHERE Id = @SosRequestId;
+
+        -- Hand the undelivered recipients to THIS run (see header).
+        UPDATE sn
+           SET ClaimedUntil = DATEADD(SECOND, @ClaimSeconds, @Now)
+        OUTPUT inserted.Id INTO @Claimed (Id)
+        FROM dbo.SosNotifications AS sn
+        WHERE sn.SosRequestId = @SosRequestId
+          AND sn.DeliveryStatus IN (1 /* Queued */, 3 /* Failed */)
+          AND sn.AttemptCount < @MaxAttempts
+          AND (sn.ClaimedUntil IS NULL OR sn.ClaimedUntil <= @Now)
+          AND EXISTS (SELECT 1 FROM dbo.UserDevices AS d
+                      WHERE d.UserId = sn.RecipientUserId AND d.IsActive = 1);
     END
 
     COMMIT TRANSACTION;
@@ -122,12 +139,9 @@ BEGIN
            d.FcmToken,
            d.InstallationId,
            d.Platform
-    FROM dbo.SosNotifications AS sn
-    JOIN dbo.UserDevices      AS d ON d.UserId = sn.RecipientUserId AND d.IsActive = 1
-    WHERE @Status = 2
-      AND sn.SosRequestId = @SosRequestId
-      AND sn.DeliveryStatus IN (1 /* Queued */, 3 /* Failed */)
-      AND sn.AttemptCount < @MaxAttempts
+    FROM @Claimed             AS c
+    JOIN dbo.SosNotifications AS sn ON sn.Id = c.Id
+    JOIN dbo.UserDevices      AS d  ON d.UserId = sn.RecipientUserId AND d.IsActive = 1
     ORDER BY sn.DistanceMeters;
 END
 GO

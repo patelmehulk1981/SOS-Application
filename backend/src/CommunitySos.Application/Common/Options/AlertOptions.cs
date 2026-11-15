@@ -26,4 +26,11 @@ public sealed class AlertOptions
     /// <summary>An alert not delivered within this time is dropped by FCM: help is needed now, not tomorrow.</summary>
     [Range(1, 240)]
     public int TimeToLiveMinutes { get; init; } = 30;
+
+    /// <summary>
+    /// How long one dispatch run holds the recipients it is pushing to. Overlapping runs skip claimed recipients,
+    /// so nobody is pushed twice; if the worker dies mid-send, the claim expires and the retry picks them up.
+    /// </summary>
+    [Range(30, 900)]
+    public int ClaimSeconds { get; init; } = 120;
 }
