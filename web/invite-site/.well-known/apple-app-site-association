@@ -1,0 +1,10 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["REPLACE_TEAM_ID.com.communitysos.app", "REPLACE_TEAM_ID.com.communitysos.app.preview"],
+        "components": [{ "/": "/i/*", "comment": "Invite links" }]
+      }
+    ]
+  }
+}

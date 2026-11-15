@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CommunitySos.Domain/CommunitySos.Domain.csproj" />
+    <Project Path="src/CommunitySos.Application/CommunitySos.Application.csproj" />
+    <Project Path="src/CommunitySos.Infrastructure/CommunitySos.Infrastructure.csproj" />
+    <Project Path="src/CommunitySos.Api/CommunitySos.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CommunitySos.Domain.Tests/CommunitySos.Domain.Tests.csproj" />
+    <Project Path="tests/CommunitySos.Api.IntegrationTests/CommunitySos.Api.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

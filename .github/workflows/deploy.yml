@@ -1,0 +1,50 @@
+# main → build once → staging → (approval) → prod. The same package is promoted; nothing is rebuilt for prod.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", "database/**", "infra/**", "web/**", ".github/workflows/deploy*.yml"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Test before shipping (InMemory + SQL Server)
+        working-directory: backend
+        env:
+          SQL_TESTS_REQUIRED: "1"
+        run: dotnet test -c Release
+      - name: Publish (linux-x64, framework-dependent for App Service)
+        run: |
+          dotnet publish backend/src/CommunitySos.Api -c Release -r linux-x64 --self-contained false -o artifacts/api
+          (cd artifacts/api && zip -qr ../api.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-package
+          path: artifacts
+          retention-days: 30
+
+  staging:
+    needs: build
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: staging
+    secrets: inherit
+
+  prod:
+    needs: staging
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: prod
+    secrets: inherit

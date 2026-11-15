@@ -1,0 +1,97 @@
+# Every pull request and push to main: backend (incl. real SQL Server in Docker), mobile checks, infra lint.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      # The SqlServer test category must run here (Docker is available): fail instead of skipping.
+      SQL_TESTS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet restore
+      - name: Build (warnings are errors in Release)
+        run: dotnet build -c Release --no-restore
+      - name: Test (domain, API on InMemory, SQL Server via Testcontainers)
+        run: >
+          dotnet test -c Release --no-build
+          --logger "trx;LogFilePrefix=results"
+          --logger "console;verbosity=normal"
+          --results-directory ../test-results
+      - name: Vulnerable packages
+        run: |
+          dotnet list package --vulnerable --include-transitive | tee ../vulnerable.txt
+          ! grep -q -E "Critical|High" ../vulnerable.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: test-results
+          retention-days: 14
+
+  mobile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      EXPO_PUBLIC_API_BASE_URL: https://api.ci.invalid
+      EXPO_PUBLIC_AUTH_MODE: firebase
+      EXPO_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - name: Generate typed routes (.expo/types is git-ignored; written by the dev server)
+        run: |
+          npx expo start --offline --port 8099 > /tmp/expo-start.log 2>&1 &
+          for i in $(seq 1 60); do [ -f .expo/types/router.d.ts ] && break; sleep 2; done
+          kill %1 || true
+          test -f .expo/types/router.d.ts || (cat /tmp/expo-start.log; exit 1)
+      - name: Typecheck, lint, unit tests
+        run: npm run check
+      - name: Production JS bundle compiles (Android and iOS)
+        run: |
+          npx expo export --platform android --output-dir /tmp/export-android
+          npx expo export --platform ios --output-dir /tmp/export-ios
+      - name: Dependency audit (high and critical only)
+        run: npm audit --omit=dev --audit-level=high
+
+  infra:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bicep build and lint
+        run: |
+          az bicep install --version v0.48.1
+          az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+          az bicep build-params --file infra/bicep/main.staging.bicepparam --stdout > /dev/null
+          az bicep build-params --file infra/bicep/main.prod.bicepparam --stdout > /dev/null
+          az bicep lint --file infra/bicep/main.bicep

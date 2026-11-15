@@ -1,0 +1,35 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+appsettings.*.local.json
+
+# Node / React Native / Expo
+node_modules/
+.expo/
+dist/
+web-build/
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+ios/Pods/
+
+# Secrets - never commit
+google-services.json
+GoogleService-Info.plist
+firebase-service-account*.json
+.env
+.env.*
+!.env.example
+
+# Generated
+database/generated/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/

@@ -1,0 +1,58 @@
+# Store and tester builds on EAS (manual). Firebase files and Maps keys come from EAS environment variables
+# (file/secret type), never from the repository. See docs/07-testing-deployment.md#mobile-release.
+name: Mobile release
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: EAS build profile
+        type: choice
+        options: [preview, production]
+        default: preview
+      platform:
+        description: Platform
+        type: choice
+        options: [all, android, ios]
+        default: all
+      submit:
+        description: Submit production builds to Play (internal track) / TestFlight
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  eas:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: mobile-release # holds the EXPO_TOKEN secret
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_CLI: eas-cli@27.2.0 # pinned (published 2026-10-29)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - name: Checks
+        env:
+          EXPO_PUBLIC_API_BASE_URL: https://api.ci.invalid
+          EXPO_OFFLINE: "1"
+        run: |
+          npx expo start --offline --port 8099 > /tmp/expo-start.log 2>&1 &
+          for i in $(seq 1 60); do [ -f .expo/types/router.d.ts ] && break; sleep 2; done
+          kill %1 || true
+          npm run check
+      - name: Build on EAS
+        run: npx --yes "$EAS_CLI" build --non-interactive --profile "${{ inputs.profile }}" --platform "${{ inputs.platform }}" --wait
+      - name: Submit to stores
+        if: inputs.submit && inputs.profile == 'production'
+        run: npx --yes "$EAS_CLI" submit --non-interactive --profile production --platform "${{ inputs.platform }}" --latest

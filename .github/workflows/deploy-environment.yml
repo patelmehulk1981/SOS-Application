@@ -1,0 +1,130 @@
+# Reusable: deploy one environment. Order matters:
+#   1. infrastructure (Bicep, idempotent)  2. database (migrations, scripts, Hangfire schema, app DB user)
+#   3. API (prod: into the "staging" slot, smoke test, swap)  4. invite site
+# Expand-then-contract migrations only: the running version must work with the new schema until the swap.
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: staging | prod
+        required: true
+        type: string
+    secrets:
+      SEED_MASTER_ADMIN_PHONE:
+        required: false
+
+permissions:
+  id-token: write # GitHub OIDC → Entra ID (federated credential; no stored Azure secrets)
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # GitHub environment "staging" / "prod": holds vars AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+    # AZURE_RESOURCE_GROUP and the secret SEED_MASTER_ADMIN_PHONE. Protect "prod" with required reviewers.
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      USE_SLOT: ${{ inputs.environment == 'prod' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-package
+          path: artifacts
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Infrastructure (Bicep)
+        id: infra
+        run: |
+          az bicep install --version v0.48.1
+          az deployment group create \
+            --resource-group "$RG" \
+            --name "sos-${{ github.run_id }}" \
+            --template-file infra/bicep/main.bicep \
+            --parameters infra/bicep/main.${{ inputs.environment }}.bicepparam \
+            --query properties.outputs -o json > outputs.json
+          for key in apiSiteName apiHostName sqlServerName sqlServerFqdn sqlDatabaseName appIdentityName appIdentityPrincipalId inviteSiteName; do
+            echo "$key=$(jq -r ".$key.value" outputs.json)" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Open SQL firewall for this runner
+        id: firewall
+        run: |
+          ip=$(curl -fsS https://api.ipify.org)
+          echo "rule=gh-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          az sql server firewall-rule create -g "$RG" -s "${{ steps.infra.outputs.sqlServerName }}" \
+            -n "gh-${{ github.run_id }}" --start-ip-address "$ip" --end-ip-address "$ip" -o none
+
+      - name: Database (migrations, T-SQL scripts, Hangfire schema, least-privilege app user)
+        working-directory: artifacts/api
+        env:
+          # The runner signs in as the deploy identity (member of the SQL Entra admin group) via the Azure CLI login.
+          ConnectionStrings__Sql: "Server=tcp:${{ steps.infra.outputs.sqlServerFqdn }},1433;Database=${{ steps.infra.outputs.sqlDatabaseName }};Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60;"
+          Database__AppPrincipal__Name: ${{ steps.infra.outputs.appIdentityName }}
+          Database__AppPrincipal__ObjectId: ${{ steps.infra.outputs.appIdentityPrincipalId }}
+          Seed__MasterAdmin__PhoneNumber: ${{ secrets.SEED_MASTER_ADMIN_PHONE }}
+          Jobs__Storage: SqlServer
+          ASPNETCORE_ENVIRONMENT: Production
+        run: dotnet CommunitySos.Api.dll --migrate
+
+      - name: Close SQL firewall
+        if: always() && steps.firewall.outputs.rule != ''
+        run: |
+          az sql server firewall-rule delete -g "$RG" -s "${{ steps.infra.outputs.sqlServerName }}" \
+            -n "${{ steps.firewall.outputs.rule }}" -o none
+
+      - name: Deploy API
+        run: |
+          slot_args=""
+          if [ "$USE_SLOT" = "true" ]; then slot_args="--slot staging"; fi
+          az webapp deploy -g "$RG" -n "${{ steps.infra.outputs.apiSiteName }}" $slot_args \
+            --src-path artifacts/api.zip --type zip --async false
+
+      - name: Smoke test (health, anonymous app info)
+        run: |
+          host="${{ steps.infra.outputs.apiHostName }}"
+          if [ "$USE_SLOT" = "true" ]; then host="${host/.azurewebsites.net/-staging.azurewebsites.net}"; fi
+          for i in $(seq 1 30); do
+            if curl -fsS "https://$host/health/ready" > /dev/null; then break; fi
+            sleep 10
+          done
+          curl -fsS "https://$host/health/ready"
+          curl -fsS "https://$host/api/v1/app-info" | jq -e '.emergencyNumbers | length > 0'
+
+      - name: Swap staging slot into production
+        if: env.USE_SLOT == 'true'
+        run: |
+          az webapp deployment slot swap -g "$RG" -n "${{ steps.infra.outputs.apiSiteName }}" --slot staging --target-slot production
+          curl -fsS --retry 10 --retry-delay 10 --retry-all-errors "https://${{ steps.infra.outputs.apiHostName }}/health/ready"
+
+      - name: Invite site (Static Web Apps)
+        run: |
+          token=$(az staticwebapp secrets list -g "$RG" -n "${{ steps.infra.outputs.inviteSiteName }}" --query properties.apiKey -o tsv)
+          echo "::add-mask::$token"
+          echo "SWA_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ env.SWA_TOKEN }}
+          action: upload
+          app_location: web/invite-site
+          skip_app_build: true
+          skip_api_build: true

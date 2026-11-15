@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>Join Community SOS</title>
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <main>
+    <div class="badge" aria-hidden="true">SOS</div>
+    <h1>You're invited to Community SOS</h1>
+    <p>Get help from people near you in an emergency, approved by your community admin. For people aged 18 and over.</p>
+
+    <section id="valid" hidden>
+      <p class="label">Your invite code</p>
+      <p class="code" id="code" aria-live="polite"></p>
+      <button type="button" id="copy" class="secondary">Copy code</button>
+      <a id="open" class="primary">Open in the app</a>
+      <p class="small">Don't have the app yet? Install it, then enter this code when you sign up.</p>
+      <div class="stores">
+        <a id="play" class="secondary">Get it on Google Play</a>
+        <a id="appstore" class="secondary">Download on the App Store</a>
+      </div>
+    </section>
+
+    <section id="invalid" hidden>
+      <p class="error">This invite link is not valid. Ask your community admin for a new one.</p>
+    </section>
+
+    <p class="emergency">In immediate danger? <a href="tel:112">Call 112</a></p>
+  </main>
+  <script src="/invite.js"></script>
+</body>
+</html>

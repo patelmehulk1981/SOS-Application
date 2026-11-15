@@ -1,0 +1,22 @@
+{
+  "routes": [
+    { "route": "/i/*", "rewrite": "/invite.html" },
+    {
+      "route": "/.well-known/apple-app-site-association",
+      "headers": { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" }
+    },
+    {
+      "route": "/.well-known/assetlinks.json",
+      "headers": { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" }
+    }
+  ],
+  "globalHeaders": {
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
+  },
+  "mimeTypes": {
+    ".json": "application/json"
+  }
+}
