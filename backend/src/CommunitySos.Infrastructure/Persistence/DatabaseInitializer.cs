@@ -43,7 +43,9 @@ public sealed partial class DatabaseInitializer(
     /// <summary>Hangfire's schema, installed here so the running app never needs DDL rights (Jobs:PrepareSchema=false in Azure).</summary>
     private async Task InstallJobsSchemaAsync(CancellationToken cancellationToken)
     {
-        if (!string.Equals(configuration["Jobs:Storage"] ?? "SqlServer", "SqlServer", StringComparison.OrdinalIgnoreCase))
+        // Whenever the database is SQL Server, even if this process uses in-memory job storage: the schema is
+        // harmless when unused, and the deployed app must always find it (it may not create it).
+        if (!db.Database.IsSqlServer())
         {
             return;
         }

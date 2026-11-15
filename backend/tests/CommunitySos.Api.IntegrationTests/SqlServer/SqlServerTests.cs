@@ -22,13 +22,19 @@ namespace CommunitySos.Api.IntegrationTests.SqlServer;
 [Trait("Category", SqlServerAvailability.Category)]
 public sealed class SqlServerTests(SqlServerFixture fixture, ITestOutputHelper output)
 {
-    /// <summary>Law Garden, Ahmedabad.</summary>
-    private static readonly GeoCoordinate Origin = new(23.022505, 72.571365);
+    private static int _originSequence;
+
+    /// <summary>
+    /// Every test (xunit makes one instance per test) gets its own SOS point, 0.5° (~55 km) from every other
+    /// test's, because the collection shares one database: otherwise one test's neighbours would be alerted
+    /// by another test's SOS.
+    /// </summary>
+    private readonly GeoCoordinate Origin = new(8.0 + (0.5 * Interlocked.Increment(ref _originSequence)), 77.0);
 
     private SqlServerApiFactory Factory => fixture.Factory;
 
     /// <summary>A point <paramref name="metersNorth"/> north of <see cref="Origin"/> (1° latitude ≈ 111,195 m).</summary>
-    private static GeoCoordinate North(double metersNorth) => new(Origin.Latitude + (metersNorth / 111_195.0), Origin.Longitude);
+    private GeoCoordinate North(double metersNorth) => new(Origin.Latitude + (metersNorth / 111_195.0), Origin.Longitude);
 
     private sealed record NeighbourSpec(double MetersNorth, double Accuracy = 20, bool Sharing = true, bool Alerts = true, bool Suspended = false, double AgeHours = 0.1);
 
